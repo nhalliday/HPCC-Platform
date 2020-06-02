@@ -36,6 +36,7 @@ set (    SRCS
          cryptotests.cpp
          hqltests.cpp
          esdltests.cpp
+         workflowtests.cpp
          configmgr/ConfigMgrUnitTests.cpp
          configmgr/ConfigMgrTemplateTests.cpp
          configmgr/ConfigMgrHPCCTests.cpp
