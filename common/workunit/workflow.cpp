@@ -339,6 +339,8 @@ private:
     unsigned wfid;
     Owned<CCloneSchedule> schedule;
     IntArray dependencies;
+    IntArray successors;
+    unsigned numPredecessors;
     WFType type;
     WFMode mode;
     unsigned success;
@@ -363,7 +365,36 @@ private:
 
 public:
     CCloneWorkflowItem() : persistRefresh(true) {}
+    CCloneWorkflowItem(unsigned _wfid) : persistRefresh(true) 
+    {
+        wfid = _wfid;
+    }
     IMPLEMENT_IINTERFACE;
+    void IncNumPredecessors()
+    {
+        numPredecessors++;
+    }
+    void DecNumPredecessors()
+    {
+        numPredecessors--;
+    }
+    bool isSuccessorsEmpty()
+    {
+        return successors.empty();
+    }
+    void addSuccessor(CCloneWorkflowItem & next)
+    {
+        #ifdef TRACE_WORKFLOW
+            LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its successor", wfid, next.queryWfid());
+        #endif
+        successors.append(next.queryWfid());
+        next.IncNumPredecessors();
+    }
+    void setMode(WFMode _mode)
+    {
+        mode = _mode;
+    }
+
     void copy(IConstWorkflowItem const * other)
     {
         wfid = other->queryWfid();
@@ -559,6 +590,12 @@ public:
             delete [] array;
     }
 
+    CCloneWorkflowItem * queryRuntimeWfid(unsigned wfid)
+    {
+        assertex((wfid > 0) && (wfid <= capacity));
+        return array + wfid - 1;
+    }
+
     IMPLEMENT_IINTERFACE;
 
     virtual void addClone(IConstWorkflowItem const * other)
@@ -568,7 +605,7 @@ public:
         array[wfid-1].copy(other);
         insert(&array[wfid-1]);
     }
-
+    
     virtual IRuntimeWorkflowItem & queryWfid(unsigned wfid)
     {
         assertex((wfid > 0) && (wfid <= capacity));
@@ -611,6 +648,90 @@ WorkflowMachine::WorkflowMachine()
 WorkflowMachine::WorkflowMachine(const IContextLogger &_logctx)
     : ctx(NULL), process(NULL), currentWfid(0), currentScheduledWfid(0), itemsWaiting(0), itemsUnblocked(0), condition(false), logctx(_logctx)
 {
+}
+
+void WorkflowMachine::addSuccessors()
+{
+    unsigned startingWfid;
+    //initial call
+    markDependents(startingWfid, nullptr, false);
+}
+void WorkflowMachine::insertConditionIntermediary(CCloneWorkflowItem &conditionExpression, unsigned successorWfid)
+{
+        unsigned wfid = intermediaryWorkflow.size();
+        #ifdef TRACE_WORKFLOW
+            LOG(MCworkflow, "Condition Expression (workflow id: %u) has marked intermediary workflow item %u as its successor",conditionExpression.queryWfid(), wfid);
+        #endif
+
+        CCloneWorkflowItem * next = new CCloneWorkflowItem(wfid); //initialise
+        Owned<IRuntimeWorkflowItem> intermediary = next;
+        intermediaryWorkflow.push_back(intermediary); //adding it to the workflow array
+
+        conditionExpression.addSuccessor(*next);
+        markDependents(successorWfid, next, false);
+}
+void WorkflowMachine::markDependents(unsigned int wfid, CCloneWorkflowItem *prev, bool prevSequential)
+{
+    CCloneWorkflowItem & item = static_cast<CCloneWorkflowItem&>(workflow->queryWfid(wfid));
+    if(item.isSuccessorsEmpty())
+    {
+        return;
+    }
+    if(prev)
+    {
+        prev->addSuccessor(item);
+        if(!prevSequential)
+            prev = nullptr;         
+    }
+
+    Owned<IWorkflowDependencyIterator> iter = item.getDependencies();
+
+    //For Non-Condition
+    if(item.queryMode() != WFModeCondition)
+    {
+        for(iter->first(); iter->isValid(); iter->next())
+        {
+            CCloneWorkflowItem & cur = static_cast<CCloneWorkflowItem&>(workflow->queryWfid((iter->query())));
+            markDependents(cur.queryWfid(), prev, (item.queryMode() == WFModeSequential));
+            cur.addSuccessor(item);
+            if((item.queryMode() == WFModeOrdered) || (item.queryMode() == WFModeSequential))
+                prev = &cur;
+        }
+    }
+    else
+    {
+        //For Condition
+
+        if(!iter->first()) throwUnexpected();
+            CCloneWorkflowItem & conditionExpression = static_cast<CCloneWorkflowItem&>(workflow->queryWfid(iter->query()));
+        if(!iter->next()) throwUnexpected();
+            unsigned wfidTrue = iter->query();
+        unsigned wfidFalse = 0;
+        if(iter->next()) 
+            wfidFalse = iter->query();
+
+        //conditionExpression WFMode should be WFConditionExpression
+        conditionExpression.setMode(WFModeConditionExpression);
+
+        markDependents(conditionExpression.queryWfid(), prev, false);
+
+        insertConditionIntermediary(conditionExpression, wfidTrue);
+        CCloneWorkflowItem & trueSuccessor = static_cast<CCloneWorkflowItem&>(workflow->queryWfid(wfidTrue));
+        trueSuccessor.addSuccessor(item);
+        
+        if(!wfidFalse)
+        {
+            insertConditionIntermediary(conditionExpression, wfidFalse);
+            CCloneWorkflowItem & falseSuccessor = static_cast<CCloneWorkflowItem&>(workflow->queryWfid((wfidFalse)));
+            falseSuccessor.addSuccessor(item);
+        }
+        else
+        {
+            conditionExpression.addSuccessor(item);
+        }
+        //Decrement this.numPredecessors by one, to account for one path not being completed.
+        item.DecNumPredecessors();  
+    }
 }
 
 void WorkflowMachine::perform(IGlobalCodeContext *_ctx, IEclProcess *_process)

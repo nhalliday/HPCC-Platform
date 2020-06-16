@@ -23,6 +23,10 @@
 #include "jlog.hpp"
 #include "eclhelper.hpp"
 
+#ifndef TRACE_WORKFLOW
+#define TRACE_WORKFLOW
+#endif
+
 class WORKUNIT_API WorkflowException : public IException, public CInterface
 {
 public:
@@ -63,6 +67,7 @@ private:
   *  - Support once, stored, persist workflow items.
   *
   */
+ class CCloneWorkflowItem;
 class WORKUNIT_API WorkflowMachine : public CInterface
 {
 public:
@@ -119,9 +124,14 @@ protected:
     bool attemptRetry(IRuntimeWorkflowItem & item, unsigned dep, unsigned scheduledWfid);
     void handleFailure(IRuntimeWorkflowItem & item, WorkflowException const * e, bool isDep);
 
+    void addSuccessors();
+    void insertConditionIntermediary(CCloneWorkflowItem & conditionExpression, unsigned wfidTrue);
+    void markDependents(unsigned wfid, CCloneWorkflowItem * prev, bool isLastSequential);
+
 protected:
     const IContextLogger &logctx;
     Owned<IWorkflowItemArray> workflow;
+    std::vector<Shared<IRuntimeWorkflowItem>> intermediaryWorkflow;
     IGlobalCodeContext *ctx;
     IEclProcess *process;
     IntArray wfidStack;

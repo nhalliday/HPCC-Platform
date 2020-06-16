@@ -566,7 +566,9 @@ enum WFMode
     WFModeWait = 6,
     WFModeOnce = 7,
     WFModeSize = 8,
-    WFModeCritical = 9
+    WFModeCritical = 9,
+    WFModeOrdered = 10,
+    WFModeConditionExpression = 11
 };
 
 enum WFState
