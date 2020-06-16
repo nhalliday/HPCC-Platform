@@ -2216,6 +2216,14 @@ void EclAgentWorkflowMachine::begin()
     if(agent.queryWorkUnit()->getDebugValueBool("prelockpersists", false))
         prelockPersists();
 }
+bool EclAgentWorkflowMachine::getParallelFlag() const
+{
+    return agent.queryWorkUnit()->getDebugValueBool("parallelWorkflow", false);
+}
+unsigned EclAgentWorkflowMachine::getThreadNumFlag() const
+{
+    return agent.queryWorkUnit()->getDebugValueInt("numWorkflowThreads", 4);
+}
 
 void EclAgentWorkflowMachine::prelockPersists()
 {
