@@ -22,10 +22,11 @@
 #include "workunit.hpp"
 #include "jlog.hpp"
 #include "eclhelper.hpp"
+#include <queue>
+#include <thread>
+#include <atomic>
 
-#ifndef TRACE_WORKFLOW
 #define TRACE_WORKFLOW
-#endif
 
 class WORKUNIT_API WorkflowException : public IException, public CInterface
 {
@@ -73,7 +74,10 @@ class WORKUNIT_API WorkflowMachine : public CInterface
 public:
     WorkflowMachine();
     WorkflowMachine(const IContextLogger &logctx);
-    void perform(IGlobalCodeContext *_ctx, IEclProcess *_process);
+    virtual void perform(IGlobalCodeContext *_ctx, IEclProcess *_process);
+
+    void performParallel(IGlobalCodeContext *_ctx, IEclProcess *_process);
+
     unsigned queryCurrentWfid() const { return currentWfid; }
     int queryLastFailCode() const;
     char const * queryLastFailMessage() const;
@@ -101,7 +105,7 @@ protected:
     virtual void noteTiming(unsigned wfid, timestamp_type startTime, stat_type elapsedNs) = 0;
 
     // Check conditions, item type and call operations below based on type
-    bool executeItem(unsigned wfid, unsigned scheduledWfid);
+    virtual bool executeItem(unsigned wfid, unsigned scheduledWfid);
 
     // Iterate through dependencies and execute them
     bool doExecuteItemDependencies(IRuntimeWorkflowItem & item, unsigned scheduledWfid);
@@ -125,13 +129,35 @@ protected:
     void handleFailure(IRuntimeWorkflowItem & item, WorkflowException const * e, bool isDep);
 
     void addSuccessors();
-    void insertConditionIntermediary(CCloneWorkflowItem & conditionExpression, unsigned wfidTrue);
+    CCloneWorkflowItem * insertPredecessor(unsigned successorWfid);
     void markDependents(unsigned wfid, CCloneWorkflowItem * prev, bool isLastSequential);
+
+    void doExecuteItemParallel(IRuntimeWorkflowItem & item);
+    void  doExecuteConditionExpression(CCloneWorkflowItem & item);
+    void handleFailureParallel(IRuntimeWorkflowItem & item, WorkflowException const * e, bool isDep);
+
+    void processWfItems();
+    CCloneWorkflowItem &queryWorkflowItem(unsigned wfid);
+    unsigned processSuccessors(CCloneWorkflowItem &item, bool reserveFirst);
+    unsigned processRuntimeSuccessors(CCloneWorkflowItem &item, bool reserveFirst);
+    unsigned executeItemParallel(unsigned wfid, unsigned scheduledWfid);
+    void addToItemQueue(unsigned wfid);
+    void initialiseItemQueue();
+
 
 protected:
     const IContextLogger &logctx;
     Owned<IWorkflowItemArray> workflow;
-    std::vector<Shared<IRuntimeWorkflowItem>> intermediaryWorkflow;
+
+    std::vector<Shared<IRuntimeWorkflowItem>> runtimeWorkflow; //contains extra workflow items that are created at runtime (for parallel execution)
+    std::queue<unsigned> itemQueue;
+    Semaphore itemQueueSem;
+    unsigned threadsWaiting;
+    unsigned numThreads;
+    unsigned startingWfid = 0U;
+    CriticalSection queueCritSec;
+    std::atomic<bool> done{false};
+
     IGlobalCodeContext *ctx;
     IEclProcess *process;
     IntArray wfidStack;
@@ -139,8 +165,45 @@ protected:
     unsigned currentScheduledWfid;
     unsigned itemsWaiting;
     unsigned itemsUnblocked;
+
+    CriticalSection conditionCritSec; //for parallel items
     unsigned condition;
 };
+/*
+class WORKUNIT_API WorkflowMachineParallel : WorkflowMachine
+{
+public:
+    WorkflowMachineParallel();
+    WorkflowMachineParallel(const IContextLogger &logctx);
+    virtual void perform(IGlobalCodeContext *_ctx, IEclProcess *_process);
+
+protected:
+    void addSuccessors();
+    CCloneWorkflowItem * insertPredecessor(unsigned successorWfid);
+    void markDependents(unsigned wfid, CCloneWorkflowItem * prev, bool isLastSequential);
+
+    void doExecuteItem(IRuntimeWorkflowItem & item);
+    bool doExecuteConditionExpression(IRuntimeWorkflowItem & item);
+    void handleFailureParallel(IRuntimeWorkflowItem & item, WorkflowException const * e, bool isDep);
+
+    void processWfItems();
+    CCloneWorkflowItem *queryWorkflowItem(unsigned wfid);
+    unsigned processSuccessors(CCloneWorkflowItem &item);
+    unsigned processRuntimeSuccessors(CCloneWorkflowItem &item);
+    virtual unsigned executeItem(unsigned wfid, unsigned scheduledWfid);
+    void addToItemQueue(unsigned wfid);
+    void initialiseItemQueue();
+
+protected:
+    std::vector<Shared<IRuntimeWorkflowItem>> runtimeWorkflow; //contains extra workflow items that are created at runtime (for parallel execution)
+    std::queue<unsigned> itemQueue;
+    Semaphore itemQueueSem;
+    unsigned threadsWaiting;
+    unsigned numThreads;
+    CriticalSection queueCritSec;
+    std::atomic<bool> done;
+};*/
+
 
 extern WORKUNIT_API IWorkflowItemIterator *createWorkflowItemIterator(IPropertyTree *p);
 extern WORKUNIT_API IWorkflowItemArray *createWorkflowItemArray(unsigned size);
