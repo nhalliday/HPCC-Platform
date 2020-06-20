@@ -144,6 +144,10 @@ protected:
     void addToItemQueue(unsigned wfid);
     void initialiseItemQueue();
 
+    virtual void getParallelFlag() = 0;
+    virtual void getThreadNumFlag() = 0;
+    bool isParallelViable();
+
 
 protected:
     const IContextLogger &logctx;
@@ -153,10 +157,11 @@ protected:
     std::queue<unsigned> itemQueue;
     Semaphore itemQueueSem;
     unsigned threadsWaiting;
-    unsigned numThreads;
+    unsigned numThreads = 1U;
     unsigned startingWfid = 0U;
     CriticalSection queueCritSec;
     std::atomic<bool> done{false};
+    bool parallel = false;
 
     IGlobalCodeContext *ctx;
     IEclProcess *process;

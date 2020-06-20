@@ -2216,6 +2216,23 @@ void EclAgentWorkflowMachine::begin()
     if(agent.queryWorkUnit()->getDebugValueBool("prelockpersists", false))
         prelockPersists();
 }
+void EclAgentWorkflowMachine::getParallelFlag()
+{
+    if(agent.queryWorkUnit()->getDebugValueBool("parallelWorkflow", false))
+    {
+        parallel = true;
+    }
+}
+void EclAgentWorkflowMachine::getThreadNumFlag()
+{
+    unsigned threads = agent.queryWorkUnit()->getDebugValueInt("parallelThreads", 4);
+    if(threads < 1)
+        threads = 4;
+    unsigned maxThreads = getAffinityCpus();
+    if(threads > maxThreads)
+        threads = maxThreads;
+    numThreads = threads;
+}
 
 void EclAgentWorkflowMachine::prelockPersists()
 {

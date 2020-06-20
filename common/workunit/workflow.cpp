@@ -1178,7 +1178,10 @@ void WorkflowMachine::performParallel(IGlobalCodeContext *_ctx, IEclProcess *_pr
     #ifdef TRACE_WORKFLOW
             LOG(MCworkflow, "Initialising threads");
     #endif
-    numThreads = 1;
+
+    //initialise thread count
+    getThreadNumFlag();
+
     std::vector<std::thread *> threads(numThreads);
     for(int i=0; i < numThreads; i++)
     {
@@ -1203,6 +1206,39 @@ void WorkflowMachine::performParallel(IGlobalCodeContext *_ctx, IEclProcess *_pr
         threads[i]->~thread();
     }
 }
+bool WorkflowMachine::isParallelViable()
+{
+    //initialise parallel flag from workunit
+    getParallelFlag();
+    if(!parallel)
+    {
+        return false;
+    }
+    for(int i = 1; i <= workflow->count(); i++)
+    {
+        CCloneWorkflowItem & cur = static_cast<CCloneWorkflowItem&>(workflow->queryWfid(i));
+
+#ifdef TRACE_WORKFLOW
+                LOG(MCworkflow, "Checking Item %u to decide if parallel viable", cur.queryWfid());
+#endif
+
+        switch(cur.queryMode())
+        {
+        case WFModeWait:
+        case WFModeBeginWait:
+        case WFModeCritical:
+        case WFModePersist:
+            return false;
+        }
+        switch(cur.queryType())
+        {
+        case WFTypeRecovery:
+            return false;
+        }
+        //switch(cur.queryState())
+    }
+    return true;
+}
 //The process parameter defines the c++ task associated with each workflowItem
 //These are executed in the context/scope of the 'agent' which calls perform()
 void WorkflowMachine::perform(IGlobalCodeContext *_ctx, IEclProcess *_process)
@@ -1210,11 +1246,17 @@ void WorkflowMachine::perform(IGlobalCodeContext *_ctx, IEclProcess *_process)
     #ifdef TRACE_WORKFLOW
             LOG(MCworkflow, "starting perform");
     #endif
-    performParallel(_ctx, _process);
-    return;
     begin();
     ctx = _ctx;
     process = _process;
+
+
+    if(isParallelViable())
+    {
+        performParallel(_ctx, _process);
+        return;
+    }
+
     Owned<WorkflowException> error;
     bool scheduling = workflow->hasScheduling();
     if(scheduling)

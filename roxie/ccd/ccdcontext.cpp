@@ -251,6 +251,23 @@ protected:
             }
         }
     }
+    virtual void getParallelFlag()
+    {
+        if(workunit->getDebugValueBool("parallelWorkflow", false))
+        {
+           parallel = true;
+        }
+    }
+    virtual void getThreadNumFlag()
+    {
+        unsigned threads = workunit->getDebugValueInt("parallelThreads", 4);
+        if(threads < 1)
+            threads = 4;
+        unsigned maxThreads = getAffinityCpus();
+        if(threads > maxThreads)
+            threads = maxThreads;
+        numThreads = threads;
+    }
     virtual void end()
     {
         if (workunit)
