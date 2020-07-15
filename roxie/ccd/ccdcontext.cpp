@@ -393,6 +393,50 @@ protected:
         logctx.CTXLOG("Finished persists - add to read lock list");
         persistReadLocks.append(*persistLock.getClear());
     }
+    virtual bool doExecutePersistActivatorParallel(IRuntimeWorkflowItem & item)
+    {
+        if (!workunit)
+        {
+            throw MakeStringException(0, "PERSIST not supported when running predeployed queries");
+        }
+        unsigned wfid = item.queryWfid();
+
+        SCMStringBuffer name;
+        const char *logicalName = item.getPersistName(name).str();
+        int maxPersistCopies = item.queryPersistCopies();
+        if (maxPersistCopies < 0)
+            maxPersistCopies = DEFAULT_PERSIST_COPIES;
+        Owned<IRemoteConnection> persistLock;
+        persistLock.setown(startPersist(logicalName));
+        doExecuteItemParallel(item);  // generated code should end up calling back to returnPersistVersion, which sets persist
+        if (!persist)
+        {
+            StringBuffer errmsg;
+            errmsg.append("Internal error in generated code: for wfid ").append(wfid).append(", persist CRC wfid ").append(item.queryPersistWfid()).append(" did not call returnPersistVersion");
+            throw MakeStringExceptionDirect(0, errmsg.str());
+        }
+        Owned<PersistVersion> thisPersist = persist.getClear();
+        if (strcmp(logicalName, thisPersist->logicalName.get()) != 0)
+        {
+            StringBuffer errmsg;
+            errmsg.append("Failed workflow/persist consistency check: wfid ").append(wfid).append(", WU persist name ").append(logicalName).append(", runtime persist name ").append(thisPersist->logicalName.get());
+            throw MakeStringExceptionDirect(0, errmsg.str());
+        }
+        if (workunit->getDebugValueInt("freezepersists", 0) != 0)
+        {
+            checkPersistMatches(logicalName, thisPersist->eclCRC);
+        }else if(!isPersistUptoDate(persistLock, item, logicalName, thisPersist->eclCRC, thisPersist->allCRC, thisPersist->isFile))
+        {
+            return true;
+        }
+    }
+    virtual void doExecutePersistItemParallel(IRuntimeWorkflowItem & item)
+    {
+        if (maxPersistCopies > 0)
+            deleteLRUPersists(logicalName, (unsigned) maxPersistCopies-1);
+        doExecuteItem(item, wfid);
+        updatePersist(persistLock, logicalName, thisPersist->eclCRC, thisPersist->allCRC);
+    }
     bool getPersistTime(time_t & when, IRuntimeWorkflowItem & item)
     {
         SCMStringBuffer name;

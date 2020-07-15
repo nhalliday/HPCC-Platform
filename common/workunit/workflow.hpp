@@ -127,7 +127,7 @@ protected:
     void handleFailure(IRuntimeWorkflowItem & item, WorkflowException const * e, bool isDep);
 
     void addSuccessors();
-    void markDependencies(unsigned wfid, CCloneWorkflowItem * logicalPredecessor, bool prevOrdered);
+    void markDependencies(unsigned wfid, CCloneWorkflowItem * logicalPredecessor, CCloneWorkflowItem * prevOrdered);
     void activateDependencies(CCloneWorkflowItem & item);
     CCloneWorkflowItem & queryWorkflowItem(unsigned wfid);
     //This creates a new node which is inserted as a predecessor to the successor item.
@@ -148,8 +148,8 @@ protected:
     void startContingency();
     void endContingency();
 
-    virtual void doExecutePersistItemParallel(IRuntimeWorkflowItem & item) = 0;
-    virtual void doExecutePersistActivatorParallel(IRuntimeWorkflowItem & item) = 0;
+    virtual void doExecutePersistItemParallel(CCloneWorkflowItem & item) = 0;
+    virtual void doExecutePersistActivatorParallel(CCloneWorkflowItem & item) = 0;
 
     void processDependentSuccessors(CCloneWorkflowItem &item);
     void processLogicalSuccessors(CCloneWorkflowItem &item);
