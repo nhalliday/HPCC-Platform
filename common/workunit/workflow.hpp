@@ -148,6 +148,9 @@ protected:
     void startContingency();
     void endContingency();
 
+    virtual void doExecutePersistItemParallel(IRuntimeWorkflowItem & item) = 0;
+    virtual void doExecutePersistActivatorParallel(IRuntimeWorkflowItem & item) = 0;
+
     void processDependentSuccessors(CCloneWorkflowItem &item);
     void processLogicalSuccessors(CCloneWorkflowItem &item);
     void processSuccessors(CCloneWorkflowItem &item, Owned<IWorkflowDependencyIterator> iter, bool activate);
