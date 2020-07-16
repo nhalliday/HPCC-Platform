@@ -272,6 +272,12 @@ public:
 
 protected:
     virtual void begin();
+    virtual IRemoteConnection *startPersist(const char * logicalName);
+    virtual PersistVersion * getClearPersistVersion(unsigned wfid, unsigned persistWfid);
+    virtual void readyPersistStore(const char * logicalName, int maxPersistCopies);
+    virtual void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC);
+    virtual bool checkFreezePersists(const char *logicalName, unsigned eclCRC);
+    virtual bool isPersistUptoDate(Owned<IRemoteConnection> &persistLock, IRuntimeWorkflowItem & item, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC, bool isFile);
 
     virtual bool getParallelFlag() const;
     virtual unsigned getThreadNumFlag() const;

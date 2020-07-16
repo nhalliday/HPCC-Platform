@@ -2216,6 +2216,43 @@ void EclAgentWorkflowMachine::begin()
     if(agent.queryWorkUnit()->getDebugValueBool("prelockpersists", false))
         prelockPersists();
 }
+IRemoteConnection *EclAgentWorkflowMachine::startPersist(const char * logicalName)
+{
+    return agent.startPersist(logicalName);
+}
+PersistVersion * EclAgentWorkflowMachine::getClearPersistVersion(unsigned wfid, unsigned persistWfid)
+{
+    if(!persist)
+    {
+        StringBuffer errmsg;
+        errmsg.append("Internal error in generated code: for wfid ").append(wfid).append(", persist CRC wfid ").append(persistWfid).append(" did not call returnPersistVersion");
+        throw MakeStringExceptionDirect(0, errmsg.str());
+    }
+    return persist.getClear();
+}
+void EclAgentWorkflowMachine::readyPersistStore(const char *logicalName, int maxPersistCopies)
+{
+    if (maxPersistCopies < 0)
+        maxPersistCopies = DEFAULT_PERSIST_COPIES;
+    if (maxPersistCopies > 0)
+        agent.deleteLRUPersists(logicalName, (unsigned)(maxPersistCopies-1));
+}
+void EclAgentWorkflowMachine::updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC)
+{
+    agent.updatePersist(persistLock, logicalName, eclCRC, allCRC);
+}
+bool EclAgentWorkflowMachine::checkFreezePersists(const char *logicalName, unsigned eclCRC)
+{
+    bool freeze = agent.arePersistsFrozen();
+    if (freeze)
+        agent.checkPersistMatches(logicalName, eclCRC);
+    return freeze;
+}
+bool EclAgentWorkflowMachine::isPersistUptoDate(Owned<IRemoteConnection> &persistLock, IRuntimeWorkflowItem & item, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC, bool isFile)
+{
+    return agent.isPersistUptoDate(persistLock, item, logicalName, eclCRC, allCRC, isFile);
+}
+
 bool EclAgentWorkflowMachine::getParallelFlag() const
 {
     return agent.queryWorkUnit()->getDebugValueBool("parallelWorkflow", false);
@@ -2839,6 +2876,10 @@ void EclAgent::updatePersist(IRemoteConnection *persistLock, const char * logica
 
 IRemoteConnection *EclAgent::startPersist(const char * logicalName)
 {
+    if (isStandAloneExe)
+    {
+        throw MakeStringException(0, "PERSIST not supported when running standalone");
+    }
     setBlockedOnPersist(logicalName);
     unlockWorkUnit();
     IRemoteConnection *persistLock = getPersistReadLock(logicalName);
