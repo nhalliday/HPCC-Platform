@@ -21,6 +21,7 @@
 #include "jlog.hpp"
 #include "jregexp.hpp"
 #include "workflow.hpp"
+#include "dasds.hpp"
 
 //------------------------------------------------------------------------------------------
 /* Parallel Workflow explanation
@@ -448,12 +449,13 @@ private:
     SCMStringBuffer persistName;
     SCMStringBuffer clusterName;
     SCMStringBuffer label;
-    //wfid of the persist predecessor
+    //wfid of the persist activator/successor (Each will point to the other)
     unsigned persistWfid;
-    //pointer to persist logical predecessor
-    CCloneWorkflowItem * persistActivator;
+    //pointer to persist activator in order to manage new logical successorships
+    CCloneWorkflowItem * persistCounterpart;
     int persistCopies;
     bool persistRefresh = true;
+    Owned<IRemoteConnection> persistLock;
     SCMStringBuffer criticalName;
     StringAttr eventName;
     StringAttr eventExtra;
@@ -494,8 +496,10 @@ public:
         LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its successor", wfid, next->queryWfid());
 #endif
         //persistActivator is used as a logical predecessor to persist items
-        unsigned nextWfid = next->queryPersistWfid();
-        if(!nextWfid)
+        unsigned nextWfid;
+        if(mode == WFModePersist)
+        nextWfid = next->queryPersistWfid();
+        else
             nextWfid = next->queryWfid();
 
         logicalSuccessors.append(nextWfid);
@@ -522,8 +526,8 @@ public:
 #ifdef TRACE_WORKFLOW
         LOG(MCworkflow, "workflow item %u [%p] is activated", wfid, this);
 #endif
-        if(persistActivator)
-            persistActivator->activate();
+        if(mode == WFModePersist)
+            persistCounterpart->activate();
         else
             active = true;
     }
@@ -547,9 +551,13 @@ public:
     {
         success = _success;
     }
-    void setPersistActivator(CCloneWorkflowItem * _persistActivator)
+    void setPersistWfid(unsigned _persistWfid)
     {
-        persistActivator = _persistActivator;
+        persistWfid = _persistWfid;
+    }
+    void setPersistCounterpart(CCloneWorkflowItem * _persistCounterpart)
+    {
+        persistCounterpart = _persistCounterpart;
     }
     void setException(WorkflowException const * e)
     {
@@ -631,6 +639,9 @@ public:
     virtual unsigned     queryPersistWfid() const { return persistWfid; }
     virtual int          queryPersistCopies() const { return persistCopies; }
     virtual bool         queryPersistRefresh() const { return persistRefresh; }
+    virtual IRuntimeWorkflowItem * queryPersistCounterpart() const { return persistCounterpart; }
+    virtual void        setPersistLock(IRemoteConnection * thisLock) { persistLock.setown(thisLock); }
+    virtual IRemoteConnection * queryPersistLock() const { return persistLock.get(); }
     virtual IStringVal & getCriticalName(IStringVal & val) const { val.set(criticalName.str()); return val; }
     virtual IStringVal & queryCluster(IStringVal & val) const { val.set(clusterName.str()); return val; }
     //info set at run time
@@ -941,8 +952,8 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
             CCloneWorkflowItem & persistActivator = queryWorkflowItem(item.queryPersistWfid());
             persistActivator.setMode(WFModePersistActivator);
             //NOTE: this means that whenever item would become a logical successor, predecessor is the logical successor instead, since it is an intermediary item
-            item.setPersistActivator(&persistActivator);
-            persistActivator.setPersist(item);
+            item.setPersistCounterpart(&persistActivator);
+            persistActivator.setPersistCounterpart(&item); //the relationship is reciprocal
             logicalPredecessor = &persistActivator;
         }
     }
@@ -1330,7 +1341,7 @@ void WorkflowMachine::executeItemParallel(unsigned wfid)
                 doExecutePersistItemParallel(item);
             case WFModePersistActivator:
                 if(doExecutePersistActivatorParallel(item))
-                    processLogicalSuccessors(item)
+                    processLogicalSuccessors(item.queryPersistCounterpart()));
                 return;
             case WFModeCritical:
                 //mightn't work
