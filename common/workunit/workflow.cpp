@@ -496,14 +496,11 @@ public:
 #ifdef TRACE_WORKFLOW
         LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its successor", wfid, next->queryWfid());
 #endif
-        //persistActivator is used as a logical predecessor to persist items
+        //persistActivator is used as a logical predecessor to dependencies of persist items
         unsigned nextWfid;
-        if(mode == WFModePersist)
-        nextWfid = next->queryPersistWfid();
-        else
-            nextWfid = next->queryWfid();
-
-        logicalSuccessors.append(nextWfid);
+        if(next->queryMode() == WFModePersist)
+            logicalSuccessors.append(next->queryPersistWfid());
+        logicalSuccessors.append(next->queryWfid());
         //note that dependency count is not incremented, since logical successors don't follow as dependents
         //Instead, logical relationships are used to activate the successors
     }
@@ -524,13 +521,15 @@ public:
     }
     void activate()
     {
+        if (mode == WFModePersist)
+        {
+            if (!persistCounterpart->isActive())
+                persistCounterpart->activate();
+        }
+        active = true;
 #ifdef TRACE_WORKFLOW
-        LOG(MCworkflow, "workflow item %u [%p] is activated", wfid, this);
+            LOG(MCworkflow, "workflow item %u [%p] is activated", wfid, this);
 #endif
-        if(mode == WFModePersist)
-            persistCounterpart->activate();
-        else
-            active = true;
     }
     void deActivate()
     {
@@ -955,10 +954,12 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
         {
             CCloneWorkflowItem & persistActivator = queryWorkflowItem(item.queryPersistWfid());
             persistActivator.setMode(WFModePersistActivator);
-            //NOTE: this means that whenever item would become a logical successor, predecessor is the logical successor instead, since it is an intermediary item
+            //NOTE: this means that whenever item would become a logical successor, predecessor is the logical successor as well, since the items come as a pair
             item.setPersistCounterpart(&persistActivator);
             persistActivator.setPersistCounterpart(&item); //the relationship is reciprocal
             persistActivator.setPersistWfid(wfid);
+            //the persist Activator must be done before the persist
+            persistActivator.addDependentSuccessor(&item);
             logicalPredecessor = &persistActivator;
         }
     }
@@ -1101,6 +1102,9 @@ void WorkflowMachine::addToItemQueue(unsigned wfid)
         wfItemQueue.push(wfid);
     }
     wfItemQueueSem.signal(1);
+#ifdef TRACE_WORKFLOW
+    LOG(MCworkflow, "item %u has been added to the item queue", wfid);
+#endif
 }
 void WorkflowMachine::processSuccessors(CCloneWorkflowItem & item, Owned<IWorkflowDependencyIterator> iter, bool isLogical)
 {
@@ -1154,7 +1158,6 @@ void WorkflowMachine::processSuccessors(CCloneWorkflowItem & item, Owned<IWorkfl
         //processLogicalSuccessors made the current function call
         else
         {
-            bool itemIsReady = false;
             if(!item.queryContingencyWithin())
             {
                 //This means that if the item is already being executed and fails, it will cause a global abort, not a contingency failure
@@ -1166,12 +1169,11 @@ void WorkflowMachine::processSuccessors(CCloneWorkflowItem & item, Owned<IWorkfl
                 if(!cur.isActive())
                 {
                     cur.activate();
-                    itemIsReady = true;
                 }
             }
-            if(itemIsReady)
+            if(cur.isActive())
             {
-                cur.setContingencyWithin(item.queryContingencyWithin());
+                cur.setContingencyWithin(item.queryContingencyWithin());//More: why is this here?
                 if(cur.queryNumDependencies() == 0)
                 {
                     cur.setAbortFlag(item.queryAbortFlag());
@@ -1515,14 +1517,21 @@ void WorkflowMachine::doExecutePersistActivatorParallel(CCloneWorkflowItem & ite
     {
         if(!isPersistUptoDate(persistLock, *persistItem, logicalName, thisPersist->eclCRC, thisPersist->allCRC, thisPersist->isFile))
         {
+#ifdef TRACE_WORKFLOW
+            LOG(MCworkflow, "Persist is not up to date. (item %u)", wfid);
+#endif
             //save thisPersist in activator item
             item.setPersistVersion(thisPersist.getClear());
             //save persist lock in persist item
             persistItem->setPersistLock(persistLock.getClear());
             processLogicalSuccessors(item);
+            processDependentSuccessors(item);
             return;
         }
     }
+#ifdef TRACE_WORKFLOW
+    LOG(MCworkflow, "Persist is up to date. (item %u)", wfid);
+#endif
     logctx.CTXLOG("Finished persists - add to read lock list");
     persistItem->setPersistLock(persistLock.getClear());
     processDependentSuccessors(*persistItem);
@@ -1781,7 +1790,7 @@ bool WorkflowMachine::isParallelViable()
         case WFModeWait:
         case WFModeBeginWait:
         case WFModeCritical:
-        case WFModePersist:
+        //case WFModePersist:
             return false;
         }
         switch(cur.queryType())
