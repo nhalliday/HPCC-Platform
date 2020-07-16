@@ -163,6 +163,8 @@ protected:
     virtual void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC) = 0;
     virtual bool checkFreezePersists(const char *logicalName, unsigned eclCRC) = 0;
     virtual bool isPersistUptoDate(Owned<IRemoteConnection> &persistLock, IRuntimeWorkflowItem & item, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC, bool isFile) = 0;
+    virtual void isPersistSupported() = 0;
+    virtual bool isPersistAlreadyLocked(const char * logicalName) = 0;
     void doExecutePersistItemParallel(CCloneWorkflowItem & item);
     void doExecutePersistActivatorParallel(CCloneWorkflowItem & item);
 

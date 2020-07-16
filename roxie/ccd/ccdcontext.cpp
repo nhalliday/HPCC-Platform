@@ -651,10 +651,6 @@ private:
 
     virtual IRemoteConnection *startPersist(const char * logicalName)
     {
-        if (!workunit)
-        {
-            throw MakeStringException(0, "PERSIST not supported when running predeployed queries");
-        }
         setBlockedOnPersist(logicalName);
         IRemoteConnection *persistLock = getPersistReadLock(logicalName);
         WorkunitUpdate w(&workunit->lock());
@@ -684,6 +680,17 @@ private:
         if (freeze)
             checkPersistMatches(logicalName, eclCRC);
         return freeze;
+    }
+    virtual void isPersistSupported()
+    {
+        if (!workunit)
+        {
+            throw MakeStringException(0, "PERSIST not supported when running predeployed queries");
+        }
+    }
+    virtual bool isPersistAlreadyLocked(const char * logicalName)
+    {
+        return false;
     }
     void checkPersistMatches(const char * logicalName, unsigned eclCRC)
     {

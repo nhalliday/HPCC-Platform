@@ -278,7 +278,8 @@ protected:
     virtual void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC);
     virtual bool checkFreezePersists(const char *logicalName, unsigned eclCRC);
     virtual bool isPersistUptoDate(Owned<IRemoteConnection> &persistLock, IRuntimeWorkflowItem & item, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC, bool isFile);
-
+    virtual void isPersistSupported();
+    virtual bool isPersistAlreadyLocked(const char * logicalName);
     virtual bool getParallelFlag() const;
     virtual unsigned getThreadNumFlag() const;
 

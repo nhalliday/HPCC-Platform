@@ -1498,42 +1498,45 @@ void WorkflowMachine::doExecuteConditionExpression(CCloneWorkflowItem & item)
 }
 void WorkflowMachine::doExecutePersistActivatorParallel(CCloneWorkflowItem & item)
 {
-    unsigned wfid = item.queryPersistWfid();
+    isPersistSupported();
     CCloneWorkflowItem * persistItem = item.queryPersistCounterpart();
     SCMStringBuffer name;
     const char *logicalName = persistItem->getPersistName(name).str();
-    Owned<IRemoteConnection> persistLock;
-    persistLock.setown(startPersist(logicalName));
-    doExecuteItemParallel(item);  // generated code should end up calling back to returnPersistVersion, which sets persist
-    Owned<PersistVersion> thisPersist;
-    thisPersist.setown(getClearPersistVersion(wfid, item.queryWfid()));
-    if (strcmp(logicalName, thisPersist->logicalName.get()) != 0)
+    unsigned wfid = item.queryPersistWfid();
+    if (!isPersistAlreadyLocked(logicalName))
     {
-        StringBuffer errmsg;
-        errmsg.append("Failed workflow/persist consistency check: wfid ").append(wfid).append(", WU persist name ").append(logicalName).append(", runtime persist name ").append(thisPersist->logicalName.get());
-        throw MakeStringExceptionDirect(0, errmsg.str());
-    }
-    if (!checkFreezePersists(logicalName, thisPersist->eclCRC))
-    {
-        if(!isPersistUptoDate(persistLock, *persistItem, logicalName, thisPersist->eclCRC, thisPersist->allCRC, thisPersist->isFile))
+        Owned<IRemoteConnection> persistLock;
+        persistLock.setown(startPersist(logicalName));
+        doExecuteItemParallel(item);  // generated code should end up calling back to returnPersistVersion, which sets persist
+        Owned<PersistVersion> thisPersist;
+        thisPersist.setown(getClearPersistVersion(wfid, item.queryWfid()));
+        if (strcmp(logicalName, thisPersist->logicalName.get()) != 0)
         {
-#ifdef TRACE_WORKFLOW
-            LOG(MCworkflow, "Persist is not up to date. (item %u)", wfid);
-#endif
-            //save thisPersist in activator item
-            item.setPersistVersion(thisPersist.getClear());
-            //save persist lock in persist item
-            persistItem->setPersistLock(persistLock.getClear());
-            processLogicalSuccessors(item);
-            processDependentSuccessors(item);
-            return;
+            StringBuffer errmsg;
+            errmsg.append("Failed workflow/persist consistency check: wfid ").append(wfid).append(", WU persist name ").append(logicalName).append(", runtime persist name ").append(thisPersist->logicalName.get());
+            throw MakeStringExceptionDirect(0, errmsg.str());
         }
+        if (!checkFreezePersists(logicalName, thisPersist->eclCRC))
+        {
+            if(!isPersistUptoDate(persistLock, *persistItem, logicalName, thisPersist->eclCRC, thisPersist->allCRC, thisPersist->isFile))
+            {
+    #ifdef TRACE_WORKFLOW
+                LOG(MCworkflow, "Persist is not up to date. (item %u)", wfid);
+    #endif
+                //save thisPersist in activator item
+                item.setPersistVersion(thisPersist.getClear());
+                //save persist lock in persist item
+                persistItem->setPersistLock(persistLock.getClear());
+                processLogicalSuccessors(item);
+                processDependentSuccessors(item);
+                return;
+            }
+        }
+        persistItem->setPersistLock(persistLock.getClear());
     }
 #ifdef TRACE_WORKFLOW
     LOG(MCworkflow, "Persist is up to date. (item %u)", wfid);
 #endif
-    logctx.CTXLOG("Finished persists - add to read lock list");
-    persistItem->setPersistLock(persistLock.getClear());
     processDependentSuccessors(*persistItem);
     processLogicalSuccessors(*persistItem);
 }

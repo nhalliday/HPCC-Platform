@@ -2218,7 +2218,16 @@ void EclAgentWorkflowMachine::begin()
 }
 IRemoteConnection *EclAgentWorkflowMachine::startPersist(const char * logicalName)
 {
-    return agent.startPersist(logicalName);
+    IRemoteConnection * persistLock;
+    if(persistsPrelocked)
+    {
+        persistLock = persistCache.getValue(logicalName);
+        persistCache.setValue(logicalName, NULL);
+        LOG(MCrunlock, unknownJob, "Decached persist read lock for %s", logicalName);
+    }
+    else
+        persistLock = agent.startPersist(logicalName);
+    return persistLock;
 }
 PersistVersion * EclAgentWorkflowMachine::getClearPersistVersion(unsigned wfid, unsigned persistWfid)
 {
@@ -2252,7 +2261,17 @@ bool EclAgentWorkflowMachine::isPersistUptoDate(Owned<IRemoteConnection> &persis
 {
     return agent.isPersistUptoDate(persistLock, item, logicalName, eclCRC, allCRC, isFile);
 }
-
+void EclAgentWorkflowMachine::isPersistSupported()
+{
+    if (agent.isStandAloneExe)
+    {
+        throw MakeStringException(0, "PERSIST not supported when running standalone");
+    }
+}
+bool EclAgentWorkflowMachine::isPersistAlreadyLocked(const char * logicalName)
+{
+    return agent.alreadyLockedPersist(logicalName);
+}
 bool EclAgentWorkflowMachine::getParallelFlag() const
 {
     return agent.queryWorkUnit()->getDebugValueBool("parallelWorkflow", false);
@@ -2881,7 +2900,7 @@ IRemoteConnection *EclAgent::startPersist(const char * logicalName)
         throw MakeStringException(0, "PERSIST not supported when running standalone");
     }
     setBlockedOnPersist(logicalName);
-    unlockWorkUnit();
+    //unlockWorkUnit();
     IRemoteConnection *persistLock = getPersistReadLock(logicalName);
     setRunning();
     return persistLock;
