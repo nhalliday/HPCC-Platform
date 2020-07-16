@@ -204,16 +204,6 @@ public:
 
 class CRoxieWorkflowMachine : public WorkflowMachine
 {
-    class PersistVersion : public CInterface
-    {
-    public:
-        PersistVersion(char const * _logicalName, unsigned _eclCRC, unsigned __int64 _allCRC, bool _isFile) : logicalName(_logicalName), eclCRC(_eclCRC), allCRC(_allCRC), isFile(_isFile) {}
-        StringAttr logicalName;
-        unsigned eclCRC;
-        unsigned __int64 allCRC;
-        bool isFile;
-    };
-
 public:
     CRoxieWorkflowMachine(IPropertyTree *_workflowInfo, IConstWorkUnit *_wu, bool _doOnce, bool _parallelWorkflow, unsigned _numWorkflowThreads, const IRoxieContextLogger &_logctx)
     : WorkflowMachine(_logctx)
@@ -392,67 +382,6 @@ protected:
         }
         logctx.CTXLOG("Finished persists - add to read lock list");
         persistReadLocks.append(*persistLock.getClear());
-    }
-    virtual bool doExecutePersistActivatorParallel(IRuntimeWorkflowItem & item)
-    {
-        if (!workunit)
-        {
-            throw MakeStringException(0, "PERSIST not supported when running predeployed queries");
-        }
-        unsigned wfid = item.queryWfid();
-        IRuntimeWorkflowItem * persistItem = item.queryPersistCounterpart();
-        SCMStringBuffer name;
-        const char *logicalName = persistItem->getPersistName(name).str();
-        int maxPersistCopies = persistItem->queryPersistCopies();
-        if (maxPersistCopies < 0)
-            maxPersistCopies = DEFAULT_PERSIST_COPIES;
-        Owned<IRemoteConnection> persistLock;
-        persistLock.setown(startPersist(logicalName));
-        doExecuteItemParallel(item);  // generated code should end up calling back to returnPersistVersion, which sets persist
-        if (!persist)
-        {
-            StringBuffer errmsg;
-            errmsg.append("Internal error in generated code: for wfid ").append(wfid).append(", persist CRC wfid ").append(persistItem->queryPersistWfid()).append(" did not call returnPersistVersion");
-            throw MakeStringExceptionDirect(0, errmsg.str());
-        }
-        Owned<PersistVersion> thisPersist = persist.getClear();
-        if (strcmp(logicalName, thisPersist->logicalName.get()) != 0)
-        {
-            StringBuffer errmsg;
-            errmsg.append("Failed workflow/persist consistency check: wfid ").append(wfid).append(", WU persist name ").append(logicalName).append(", runtime persist name ").append(thisPersist->logicalName.get());
-            throw MakeStringExceptionDirect(0, errmsg.str());
-        }
-        if (workunit->getDebugValueInt("freezepersists", 0) != 0)
-        {
-            checkPersistMatches(logicalName, thisPersist->eclCRC);
-        }else if(!isPersistUptoDate(persistLock, *persistItem, logicalName, thisPersist->eclCRC, thisPersist->allCRC, thisPersist->isFile))
-        {
-            //save thisPersist in activator item
-            //save persist lock in persist item
-            persistItem->setPersistLock(persistLock);
-            return true;
-        }
-        logctx.CTXLOG("Finished persists - add to read lock list");
-        persistReadLocks.append(*persistLock.getClear());
-        return false;
-    }
-    virtual void doExecutePersistItemParallel(IRuntimeWorkflowItem & item)
-    {
-        SCMStringBuffer name;
-        const char *logicalName = item.getPersistName(name).str();
-        int maxPersistCopies = item.queryPersistCopies();
-        if (maxPersistCopies < 0)
-            maxPersistCopies = DEFAULT_PERSIST_COPIES;
-
-        IRemoteConnection * persistLock = item.queryPersistLock();
-        PersistVersion * thisPersist=  item.queryPersistCounterpart()->queryPersistVersion();
-        if (maxPersistCopies > 0)
-            deleteLRUPersists(logicalName, (unsigned) maxPersistCopies-1);
-        doExecuteItemParallel(item);
-        updatePersist(persistLock, logicalName, thisPersist->eclCRC, thisPersist->allCRC);
-
-        logctx.CTXLOG("Finished persists - add to read lock list");
-        persistReadLocks.append(*persistLock->getClear());
     }
     bool getPersistTime(time_t & when, IRuntimeWorkflowItem & item)
     {
@@ -704,7 +633,7 @@ private:
         return false;
     }
 
-    void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC)
+    virtual void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC)
     {
         StringBuffer lfn, crcName, eclName, whenName;
         expandLogicalFilename(lfn, logicalName, workunit, false, false);
@@ -720,15 +649,42 @@ private:
         changePersistLockMode(persistLock, RTM_LOCK_READ, logicalName, true);
     }
 
-    IRemoteConnection *startPersist(const char * logicalName)
+    virtual IRemoteConnection *startPersist(const char * logicalName)
     {
+        if (!workunit)
+        {
+            throw MakeStringException(0, "PERSIST not supported when running predeployed queries");
+        }
         setBlockedOnPersist(logicalName);
         IRemoteConnection *persistLock = getPersistReadLock(logicalName);
         WorkunitUpdate w(&workunit->lock());
         w->setState(WUStateRunning);
         return persistLock;
     }
-
+    virtual PersistVersion * getClearPersistVersion(unsigned wfid, unsigned persistWfid)
+    {
+        if (!persist)
+        {
+            StringBuffer errmsg;
+            errmsg.append("Internal error in generated code: for wfid ").append(wfid).append(", persist CRC wfid ").append(persistWfid).append(" did not call returnPersistVersion");
+            throw MakeStringExceptionDirect(0, errmsg.str());
+        }
+        return persist.getClear();
+    }
+    virtual void readyPersistStore(const char *logicalName, int maxPersistCopies)
+    {
+        if (maxPersistCopies < 0)
+            maxPersistCopies = DEFAULT_PERSIST_COPIES;
+        if (maxPersistCopies > 0)
+            deleteLRUPersists(logicalName, (unsigned) maxPersistCopies-1);
+    }
+    virtual bool checkFreezePersists(const char *logicalName, unsigned eclCRC)
+    {
+        bool freeze = (workunit->getDebugValueInt("freezepersists", 0) != 0);
+        if (freeze)
+            checkPersistMatches(logicalName, eclCRC);
+        return freeze;
+    }
     void checkPersistMatches(const char * logicalName, unsigned eclCRC)
     {
         StringBuffer lfn, eclName;

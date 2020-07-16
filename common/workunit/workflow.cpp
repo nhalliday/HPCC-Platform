@@ -456,6 +456,7 @@ private:
     int persistCopies;
     bool persistRefresh = true;
     Owned<IRemoteConnection> persistLock;
+    Owned<PersistVersion> thisPersist;
     SCMStringBuffer criticalName;
     StringAttr eventName;
     StringAttr eventExtra;
@@ -559,6 +560,12 @@ public:
     {
         persistCounterpart = _persistCounterpart;
     }
+    CCloneWorkflowItem * queryPersistCounterpart() const { return persistCounterpart; }
+    void setPersistLock(IRemoteConnection * thisLock) { persistLock.setown(thisLock); }
+    IRemoteConnection * queryPersistLock() const { return persistLock.get(); }
+    void setPersistVersion(PersistVersion * _thisPersist) { thisPersist.setown(_thisPersist); }
+    PersistVersion *queryPersistVersion() { return thisPersist.get(); }
+
     void setException(WorkflowException const * e)
     {
 #ifdef TRACE_WORKFLOW
@@ -639,9 +646,6 @@ public:
     virtual unsigned     queryPersistWfid() const { return persistWfid; }
     virtual int          queryPersistCopies() const { return persistCopies; }
     virtual bool         queryPersistRefresh() const { return persistRefresh; }
-    virtual IRuntimeWorkflowItem * queryPersistCounterpart() const { return persistCounterpart; }
-    virtual void        setPersistLock(IRemoteConnection * thisLock) { persistLock.setown(thisLock); }
-    virtual IRemoteConnection * queryPersistLock() const { return persistLock.get(); }
     virtual IStringVal & getCriticalName(IStringVal & val) const { val.set(criticalName.str()); return val; }
     virtual IStringVal & queryCluster(IStringVal & val) const { val.set(clusterName.str()); return val; }
     //info set at run time
@@ -954,6 +958,7 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
             //NOTE: this means that whenever item would become a logical successor, predecessor is the logical successor instead, since it is an intermediary item
             item.setPersistCounterpart(&persistActivator);
             persistActivator.setPersistCounterpart(&item); //the relationship is reciprocal
+            persistActivator.setPersistWfid(wfid);
             logicalPredecessor = &persistActivator;
         }
     }
@@ -1038,7 +1043,6 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
         conditionExpression.setMode(WFModeConditionExpression);
         markDependencies(conditionExpression.queryWfid(), logicalPredecessor, nullptr);
 
-        CCloneWorkflowItem & trueSuccessor = queryWorkflowItem(wfidTrue);
         //add logical successors
          conditionExpression.addLogicalSuccessor(insertLogicalPredecessor(wfidTrue));
         //add dependent successors
@@ -1339,9 +1343,9 @@ void WorkflowMachine::executeItemParallel(unsigned wfid)
                 break;
             case WFModePersist:
                 doExecutePersistItemParallel(item);
+                break;
             case WFModePersistActivator:
-                if(doExecutePersistActivatorParallel(item))
-                    processLogicalSuccessors(item.queryPersistCounterpart()));
+                doExecutePersistActivatorParallel(item);
                 return;
             case WFModeCritical:
                 //mightn't work
@@ -1490,6 +1494,57 @@ void WorkflowMachine::doExecuteConditionExpression(CCloneWorkflowItem & item)
     }
     item.removeLogicalSuccessors();
 }
+void WorkflowMachine::doExecutePersistActivatorParallel(CCloneWorkflowItem & item)
+{
+    unsigned wfid = item.queryPersistWfid();
+    CCloneWorkflowItem * persistItem = item.queryPersistCounterpart();
+    SCMStringBuffer name;
+    const char *logicalName = persistItem->getPersistName(name).str();
+    Owned<IRemoteConnection> persistLock;
+    persistLock.setown(startPersist(logicalName));
+    doExecuteItemParallel(item);  // generated code should end up calling back to returnPersistVersion, which sets persist
+    Owned<PersistVersion> thisPersist;
+    thisPersist.setown(getClearPersistVersion(wfid, item.queryWfid()));
+    if (strcmp(logicalName, thisPersist->logicalName.get()) != 0)
+    {
+        StringBuffer errmsg;
+        errmsg.append("Failed workflow/persist consistency check: wfid ").append(wfid).append(", WU persist name ").append(logicalName).append(", runtime persist name ").append(thisPersist->logicalName.get());
+        throw MakeStringExceptionDirect(0, errmsg.str());
+    }
+    if (!checkFreezePersists(logicalName, thisPersist->eclCRC))
+    {
+        if(!isPersistUptoDate(persistLock, *persistItem, logicalName, thisPersist->eclCRC, thisPersist->allCRC, thisPersist->isFile))
+        {
+            //save thisPersist in activator item
+            item.setPersistVersion(thisPersist.getClear());
+            //save persist lock in persist item
+            persistItem->setPersistLock(persistLock.getClear());
+            processLogicalSuccessors(item);
+            return;
+        }
+    }
+    logctx.CTXLOG("Finished persists - add to read lock list");
+    persistItem->setPersistLock(persistLock.getClear());
+    processDependentSuccessors(*persistItem);
+    processLogicalSuccessors(*persistItem);
+}
+void WorkflowMachine::doExecutePersistItemParallel(CCloneWorkflowItem & item)
+{
+    SCMStringBuffer name;
+    const char *logicalName = item.getPersistName(name).str();
+    int maxPersistCopies = item.queryPersistCopies();
+
+    IRemoteConnection * persistLock = item.queryPersistLock();
+    PersistVersion * thisPersist=  item.queryPersistCounterpart()->queryPersistVersion();
+
+    readyPersistStore(logicalName, maxPersistCopies);
+
+    doExecuteItemParallel(item);
+    updatePersist(persistLock, logicalName, thisPersist->eclCRC, thisPersist->allCRC);
+
+    logctx.CTXLOG("Finished persists - add to read lock list");
+    //persist lock is saved in the item
+}
 void WorkflowMachine::performItemParallel(unsigned wfid)
 {
 #ifdef TRACE_WORKFLOW
@@ -1592,7 +1647,7 @@ void WorkflowMachine::initialiseItemQueue()
         if((cur->queryNumDependencies() == 0) && cur->isActive())
         {
 #ifdef TRACE_WORKFLOW
-            LOG(MCworkflow, "item %u has been added to the inital task queue", cur.queryWfid());
+            LOG(MCworkflow, "item %u has been added to the inital task queue", cur->queryWfid());
 #endif
             wfItemQueue.push(cur->queryWfid());
         }

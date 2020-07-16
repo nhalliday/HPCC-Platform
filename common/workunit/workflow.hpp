@@ -70,6 +70,15 @@ private:
   *  - Support once, stored, persist workflow items.
   *
   */
+class WORKUNIT_API PersistVersion : public CInterface
+{
+public:
+    PersistVersion(char const * _logicalName, unsigned _eclCRC, unsigned __int64 _allCRC, bool _isFile) : logicalName(_logicalName), eclCRC(_eclCRC), allCRC(_allCRC), isFile(_isFile) {}
+    StringAttr logicalName;
+    unsigned eclCRC;
+    unsigned __int64 allCRC;
+    bool isFile;
+};
 class CCloneWorkflowItem;
 class WORKUNIT_API WorkflowMachine : public CInterface
 {
@@ -148,8 +157,14 @@ protected:
     void startContingency();
     void endContingency();
 
-    virtual void doExecutePersistItemParallel(CCloneWorkflowItem & item) = 0;
-    virtual void doExecutePersistActivatorParallel(CCloneWorkflowItem & item) = 0;
+    virtual IRemoteConnection *startPersist(const char * logicalName) = 0;
+    virtual PersistVersion * getClearPersistVersion(unsigned wfid, unsigned persistWfid) = 0;
+    virtual void readyPersistStore(const char * logicalName, int maxPersistCopies) = 0;
+    virtual void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC) = 0;
+    virtual bool checkFreezePersists(const char *logicalName, unsigned eclCRC) = 0;
+    virtual bool isPersistUptoDate(Owned<IRemoteConnection> &persistLock, IRuntimeWorkflowItem & item, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC, bool isFile) = 0;
+    void doExecutePersistItemParallel(CCloneWorkflowItem & item);
+    void doExecutePersistActivatorParallel(CCloneWorkflowItem & item);
 
     void processDependentSuccessors(CCloneWorkflowItem &item);
     void processLogicalSuccessors(CCloneWorkflowItem &item);

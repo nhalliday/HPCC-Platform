@@ -263,17 +263,6 @@ class EclAgent;
 
 class EclAgentWorkflowMachine : public WorkflowMachine
 {
-private:
-    class PersistVersion : public CInterface
-    {
-    public:
-        PersistVersion(char const * _logicalName, unsigned _eclCRC, unsigned __int64 _allCRC, bool _isFile) : logicalName(_logicalName), eclCRC(_eclCRC), allCRC(_allCRC), isFile(_isFile) {}
-        StringAttr logicalName;
-        unsigned eclCRC;
-        unsigned __int64 allCRC;
-        bool isFile;
-    };
-
 public:
     EclAgentWorkflowMachine(EclAgent & _agent);
     void returnPersistVersion(char const * logicalName, unsigned eclCRC, unsigned __int64 allCRC, bool isFile)
@@ -516,7 +505,7 @@ public:
     virtual void selectCluster(const char * cluster);
     virtual void restoreCluster();
 
-    IRemoteConnection *startPersist(const char * name);
+    virtual IRemoteConnection *startPersist(const char * name);
     bool alreadyLockedPersist(const char * persistName);
     void finishPersist(const char * persistName, IRemoteConnection *persistLock);
     void updatePersist(IRemoteConnection *persistLock, const char * logicalName, unsigned eclCRC, unsigned __int64 allCRC);

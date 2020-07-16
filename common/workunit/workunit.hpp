@@ -649,11 +649,6 @@ interface IRuntimeWorkflowItem : extends IConstWorkflowItem
     virtual void reset() = 0;
     virtual void setEvent(const char * name, const char * extra) = 0;
     virtual void incScheduleCount() = 0;
-    virtual IRuntimeWorkflowItem *queryPersistCounterpart() const = 0;
-    virtual void setPersistLock(IRemoteConnection * thisLock) = 0;
-    virtual IRemoteConnection *queryPersistLock() const = 0;
-    virtual void setPersistVersion(PersistVersion * thisPersist) = 0;
-    virtual PersistVersion *queryPersistVersion() const = 0;
 };
 
 
