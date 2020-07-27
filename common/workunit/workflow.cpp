@@ -24,6 +24,10 @@
 
 //------------------------------------------------------------------------------------------
 /* Parallel Workflow explanation
+Prerequisite
+Being able to understand how the workflow engine works requires understanding the code generator. In particular, the way that queries get translated into a workflow structure.
+Many details are important or unexpected. For example, persist items come as a pair, but in the opposite order to what you might expect.
+There is a useful description in the WorkUnits.rst devdoc.
 
 Key information
 •	All items are executed a maximum of one time per query. (Unless they are recovered)
@@ -97,11 +101,13 @@ Anything that uses activate()/deactivate() is protected by a critical section.
 
 Alive
 When an item starts executing, it has to be "alive". This means that it fulfills the following condition: (!abort || item.queryException() || item.queryContingencyWithin())
-Whenever the global abort is false, all items will be executed.
-If the global abort is true, then only items that are part of a contingency or have failed children can be executed.
-Items that are part of a contingency and have an exception are treated in similar fashion to items with just an exception.
+If the item is no longer alive, then instead of processing it, the item is discarded.
+Whenever the global abort is false, all items are alive.
+If the global abort is true, then only items that are part of a contingency or have an exception are alive. (For an item to have an exception, either it has failed or its children have failed)
+Items that are part of a contingency **and** have an exception are treated like items with just an exception.
 
-The global abort changing is the only reason that items can go from alive to dead. Items are made inactive if they turn dead, because this allows a different logical predecessor to re-activate them.
+The global abort changing is the only reason that items can go from alive to dead.
+Items are made inactive once they turn dead, so that a different logical predecessor can re-activate them.
 
 Complications
 The algorithm is made more complicated by having to
