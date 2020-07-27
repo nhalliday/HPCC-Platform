@@ -30,6 +30,8 @@
     #define TRACE_WORKFLOW
 #endif
 
+#define WFERR_ExecutingItemMoreThanOnce     5103
+
 class WORKUNIT_API WorkflowException : public IException, public CInterface
 {
 public:

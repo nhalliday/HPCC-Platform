@@ -1180,6 +1180,7 @@ void WorkflowMachine::checkAbort(CCloneWorkflowItem & item)
     CriticalBlock thisBlock(exceptionCritSec);
     if(!abort)
     {
+        //This stores the error that causes the workflow to abort
         runtimeError.set(item.queryException());
         abort = true;
     }
@@ -1221,17 +1222,7 @@ void WorkflowMachine::executeItemParallel(unsigned wfid)
     switch(item.queryState())
     {
     case WFStateDone:
-        if (item.queryMode() == WFModePersist)
-        {
-#ifdef TRACE_WORKFLOW
-            LOG(MCworkflow, "Recheck persist %u", wfid);
-#endif
-            break;
-        }
-#ifdef TRACE_WORKFLOW
-        LOG(MCworkflow, "Nothing to be done for workflow item %u", wfid);
-#endif
-        return;
+        throw new WorkflowException(WFERR_ExecutingItemMoreThanOnce, "INTERNAL ERROR: attempting to execute workflow item more than once", wfid, WorkflowException::SYSTEM, MSGAUD_user);
     case WFStateSkip:
 #ifdef TRACE_WORKFLOW
         LOG(MCworkflow, "Nothing to be done for workflow item %u", wfid);
@@ -1241,13 +1232,11 @@ void WorkflowMachine::executeItemParallel(unsigned wfid)
         throw new WorkflowException(0, "INTERNAL ERROR: attempting to execute workflow item in wait state", wfid, WorkflowException::SYSTEM, MSGAUD_user);
     case WFStateBlocked:
         throw new WorkflowException(0, "INTERNAL ERROR: attempting to execute workflow item in blocked state", wfid, WorkflowException::SYSTEM, MSGAUD_user);
-    case WFStateFail:
-        item.reset();
-        break;
     }
     if(item.queryException())
     {
         checkAbort(item);
+        item.setState(WFStateFail);
         failDependentSuccessors(item);
         bool hasContingency = activateFailureContingency(item);
         if(hasContingency)
