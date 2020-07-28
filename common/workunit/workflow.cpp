@@ -492,7 +492,7 @@ public:
     void addDependentSuccessor(CCloneWorkflowItem * next)
     {
 #ifdef TRACE_WORKFLOW
-        LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its successor", wfid, next->queryWfid());
+        LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its dependent successor", wfid, next->queryWfid());
 #endif
         dependentSuccessors.append(next->queryWfid());
         next->incNumDependencies();
@@ -500,11 +500,18 @@ public:
     void addLogicalSuccessor(CCloneWorkflowItem * next)
     {
 #ifdef TRACE_WORKFLOW
-        LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its successor", wfid, next->queryWfid());
+        LOG(MCworkflow, "Workflow item %u has marked workflow item %u as its logical successor", wfid, next->queryWfid());
 #endif
         logicalSuccessors.append(next->queryWfid());
         //note that dependency count is not incremented, since logical successors don't follow as dependents
         //Instead, logical relationships are used to activate the successors
+    }
+    bool hasLogicalSuccessor(unsigned wfid)
+    {
+        if(logicalSuccessors.contains(wfid))
+            return true;
+        else
+            return false;
     }
     //For condition expression
     void removeLogicalSuccessors()
@@ -830,17 +837,22 @@ void WorkflowMachine::addSuccessors()
             if(item->queryState() == WFStateReqd)
             {
                 //initial call
-                startingWfid = item->queryWfid();
+                parentWfid = item->queryWfid();
 #ifdef TRACE_WORKFLOW
-                LOG(MCworkflow, "Item %u has been identified as the 'parent' item, with Reqd state", startingWfid);
+                LOG(MCworkflow, "Item %u has been identified as the 'parent' item, with Reqd state", parentWfid);
 #endif
-                markDependencies(startingWfid, nullptr, false);
+                CCloneWorkflowItem * startItem = new CCloneWorkflowItem();
+                markDependencies(parentWfid, startItem, false);
+#ifdef TRACE_WORKFLOW
+                LOG(MCworkflow, "Adding initial workflow items");
+#endif
+                processLogicalSuccessors(*startItem);
                 break;
             }
             if(!iter->next()) break;
         }
     }
-    assertex(startingWfid != 0);
+    assertex(parentWfid != 0);
 #ifdef TRACE_WORKFLOW
     //Outputting debug info about each workflow item.
     unsigned totalDependencies = 0;
@@ -922,31 +934,15 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
 #endif
 
     CCloneWorkflowItem & item = queryWorkflowItem(wfid);
-    bool alreadyProcessed = !item.isDependentSuccessorsEmpty();
-    //Ordered causes the effect of logicalPredecessor to skip a generation
+    if (logicalPredecessor->hasLogicalSuccessor(wfid))
+        return;
+    bool alreadyProcessed = (!item.isDependentSuccessorsEmpty());
+
+    //Ordered causes the effect of logicalPredecessor to skip a generation (to this item's dependencies)
     if(!prevOrdered)
     {
-        if(logicalPredecessor)
-        {
-            if(!alreadyProcessed)
-                logicalPredecessor->addLogicalSuccessor(&item);
-        }
-        else
-        {
-            //if logicalPredecessor is nullptr, then the item should be marked as active, since it doesn't have to follow on from anything else to execute.
-            if(!item.isActive())
-            {
-                item.activate();
-                //This checks that the current item has already performed the markDependencies algorithm
-                if(alreadyProcessed)
-                {
-                    activateDependencies(item);
-                }
-            }
-        }
+        logicalPredecessor->addLogicalSuccessor(&item);
     }
-    if(alreadyProcessed)
-        return;
 
     Owned<IWorkflowDependencyIterator> iter = item.getDependencies();
     //For Non-Condition items
@@ -958,32 +954,35 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
 
         CCloneWorkflowItem * prev = nullptr;
         bool thisOrdered = false;
+        bool onlyProcessFirst = false;
         for(iter->first(); iter->isValid(); iter->next())
         {
             CCloneWorkflowItem & cur = queryWorkflowItem(iter->query());
-            if(prev)
+            //prev is the logical predecessor to cur.
+            switch(item.queryMode())
             {
-                //prev is the logical predecessor to cur.
-                switch(item.queryMode())
+            case WFModeOrdered:
+                onlyProcessFirst = alreadyProcessed;
+                if(prev)
                 {
-                case WFModeOrdered:
-                    //this successorship should be added even if cur has already marked dependents
                     cur.addLogicalSuccessor(prev);
                     //Note: thisOrdered is false for the first ORDERED action
                     thisOrdered = true;
-                    //Note: Ordered doesn't change logicalPredecessor, so that the dependencies of the cur item can use logicalPredecessor. It skips a generation.
-                    break;
-                case WFModeSequential:
-                    //Note: Sequential changes logicalPredecessor, so that the dependencies of the cur item also depend on prev.
-                    logicalPredecessor = prev;
-                    break;
-                default:
-                    break;
                 }
+                //Note: Ordered doesn't change logicalPredecessor
+                break;
+            case WFModeSequential:
+                onlyProcessFirst = alreadyProcessed;
+                //Note: Sequential changes logicalPredecessor, so that the dependencies of the cur item also depend on prev.
+                if(prev)
+                    logicalPredecessor = prev;
+                break;
             }
             markDependencies(cur.queryWfid(), logicalPredecessor, thisOrdered);
-            //This happens after markDependencies as a way of ensuring that each item only marks its dependencies once.
-            cur.addDependentSuccessor(&item);
+            if(onlyProcessFirst)
+                return;
+            if(!alreadyProcessed)
+                cur.addDependentSuccessor(&item);//this means that alreadyProcessed will be true when next evaluated
             prev = &cur;
         }
     }
@@ -996,6 +995,9 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
         if(!iter->first())
             throwUnexpected();
         CCloneWorkflowItem & conditionExpression = queryWorkflowItem(iter->query());
+        markDependencies(conditionExpression.queryWfid(), logicalPredecessor, false);
+        if(alreadyProcessed)
+            return;
         if(!iter->next())
             throwUnexpected();
         unsigned wfidTrue = iter->query();
@@ -1004,8 +1006,6 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
             wfidFalse = iter->query();
 
         conditionExpression.setMode(WFModeConditionExpression);
-        markDependencies(conditionExpression.queryWfid(), logicalPredecessor, false);
-
         conditionExpression.addLogicalSuccessor(insertLogicalPredecessor(wfidTrue));
         CCloneWorkflowItem & trueSuccessor = queryWorkflowItem(wfidTrue);
         trueSuccessor.addDependentSuccessor(&item);
@@ -1024,31 +1024,13 @@ void WorkflowMachine::markDependencies(unsigned int wfid, CCloneWorkflowItem *lo
     unsigned successWfid = item.querySuccess();
     if(successWfid)
     {
-         item.setSuccessWfid(insertLogicalPredecessor(successWfid)->queryWfid());
+        item.setSuccessWfid(insertLogicalPredecessor(successWfid)->queryWfid());
     }
     unsigned failureWfid = item.queryFailure();
     if(failureWfid)
     {
         //creates an intermediary item, and inserts it between "item" and the failure contingency
         item.setFailureWfid(insertLogicalPredecessor(failureWfid)->queryWfid());
-    }
-}
-void WorkflowMachine::activateDependencies(CCloneWorkflowItem & item)
-{
-    Owned<IWorkflowDependencyIterator> iter = item.getDependencies();
-    for(iter->first(); iter->isValid(); iter->next())
-    {
-        CCloneWorkflowItem & cur = queryWorkflowItem(iter->query());
-        if(!cur.isActive())
-        {
-            cur.activate();
-            activateDependencies(cur);
-        }
-        //This break is for when a condition item is being activated.
-        //Out of its dependencies, only the condition expression should be made active.
-        //trueresult and falseresult should be left inactive
-        if(item.queryMode() == WFModeCondition)
-            break;
     }
 }
 void WorkflowMachine::addToItemQueue(unsigned wfid)
@@ -1062,7 +1044,7 @@ void WorkflowMachine::addToItemQueue(unsigned wfid)
 void WorkflowMachine::processSuccessors(CCloneWorkflowItem & item, Owned<IWorkflowDependencyIterator> iter, bool isLogical)
 {
     //item will never be executed later, if it has been passed as an argument to this function
-    if(item.queryWfid() == startingWfid)
+    if(item.queryWfid() == parentWfid)
     {
         //update stop conditions
         parentReached = true;
@@ -1092,20 +1074,11 @@ void WorkflowMachine::processSuccessors(CCloneWorkflowItem & item, Owned<IWorkfl
                 }
             }
         }
-        //processDependentSuccessors made the current function call
-        else if(!isLogical)
-        {
-            unsigned numPred = cur.atomicDecNumDependencies();
-            if((numPred == 1) && cur.isActive())
-            {
-                addToItemQueue(thisWfid);
-            }
-        }
         //processLogicalSuccessors made the current function call
-        else
+        else if(isLogical)
         {
             if(!cur.queryContingencyWithin())
-                cur.setContingencyWithin(item.queryContingencyWithin());//item is certainly now "active"
+                cur.setContingencyWithin(item.queryContingencyWithin());//item may now be "active"
             bool itemIsReady = false;
             {
                 CriticalBlock thisBlock(activationCritSec);
@@ -1119,9 +1092,17 @@ void WorkflowMachine::processSuccessors(CCloneWorkflowItem & item, Owned<IWorkfl
             {
                 if(cur.queryNumDependencies() == 0)
                 {
-                    //ThreadSafe
                     addToItemQueue(thisWfid);
                 }
+            }
+        }
+        //processDependentSuccessors made the current function call
+        else
+        {
+            unsigned numPred = cur.atomicDecNumDependencies();
+            if((numPred == 1) && cur.isActive())
+            {
+                addToItemQueue(thisWfid);
             }
         }
     }
@@ -1510,23 +1491,6 @@ CCloneWorkflowItem &WorkflowMachine::queryWorkflowItem(unsigned wfid)
         return static_cast<CCloneWorkflowItem&>(*logicalWorkflow[index].get());
     }
 }
-void WorkflowMachine::initialiseItemQueue()
-{
-    //Items without any dependencies are ready be executed (if they are active)
-    //currently, no runtime workflow items should start on the queue
-    for(int i = 1; i <= workflow->count(); i++)
-    {
-        CCloneWorkflowItem & cur = queryWorkflowItem(i);
-        if((cur.queryNumDependencies() == 0) && cur.isActive())
-        {
-#ifdef TRACE_WORKFLOW
-            LOG(MCworkflow, "item %u has been added to the inital task queue", cur.queryWfid());
-#endif
-            wfItemQueue.push(i);
-        }
-    }
-    wfItemQueueSem.signal(wfItemQueue.size());
-}
 bool WorkflowMachine::checkIfDone()
 {
     if((activeContingencies == 0) && (parentReached))
@@ -1590,12 +1554,6 @@ void WorkflowMachine::performParallel(IGlobalCodeContext *_ctx, IEclProcess *_pr
 #ifdef TRACE_WORKFLOW
     LOG(MCworkflow, "Finished marking Items with their successors");
 #endif
-
-    //add initial values
-#ifdef TRACE_WORKFLOW
-    LOG(MCworkflow, "Adding initial workflow items");
-#endif
-    initialiseItemQueue();
 
 #ifdef TRACE_WORKFLOW
     LOG(MCworkflow, "Initialising threads");

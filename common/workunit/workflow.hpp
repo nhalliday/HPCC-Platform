@@ -178,7 +178,7 @@ protected:
     //optional debug value "parallelThreads" to select number of threads
     unsigned numThreads = 1U;
     //the wfid of the "container" item. It has no successors, only dependents.
-    unsigned startingWfid = 0U;
+    unsigned parentWfid = 0U;
      //flag is set when the "parent" item is reached. There may still be pending contingencies
     std::atomic<bool> parentReached{false};
     //flag is set once the workflow is completed
